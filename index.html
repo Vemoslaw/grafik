@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Grafik przerw</title>
+<style>
+:root{
+  --bg:#f5f6f8;--surface:#ffffff;--text:#16181d;--muted:#6a7080;--line:#dfe2e8;
+  --accent:#2563eb;--free:#eef6ee;--free-line:#b9dcb9;
+  --mine:#dbe8ff;--mine-line:#7aa2f7;--taken:#f1f1f3;--now:#f59e0b;
+  color-scheme:light dark;
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --bg:#121418;--surface:#1c1f26;--text:#eceef3;--muted:#9aa1b2;--line:#2c313b;
+    --accent:#6b9bff;--free:#1a2a1d;--free-line:#2f5434;
+    --mine:#1f3157;--mine-line:#5b86e0;--taken:#23262d;--now:#fbbf24;
+  }
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;line-height:1.4;
+  padding:env(safe-area-inset-top,0px) 0 env(safe-area-inset-bottom,0px)}
+main{max-width:760px;margin:0 auto;padding:20px 14px 40px}
+header{text-align:center;margin-bottom:18px}
+.small{font-size:13px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin:0 0 4px}
+h1{font-size:clamp(26px,7vw,40px);margin:0;line-height:1.15;text-transform:capitalize}
+.sub{margin:8px 0 0;color:var(--muted);font-size:15px}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:14px;margin-bottom:14px}
+label{display:block;font-size:14px;color:var(--muted);margin-bottom:6px}
+input{width:100%;font-size:17px;padding:11px 12px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--text)}
+input:focus{outline:2px solid var(--accent);outline-offset:1px}
+.stats{display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;font-size:14px;color:var(--muted);margin-top:10px}
+.legend{display:flex;gap:12px;flex-wrap:wrap}
+.dot{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:5px;border:1px solid}
+.hour{margin-bottom:12px}
+.hour h2{font-size:15px;margin:0 0 6px 2px;color:var(--muted);font-weight:600}
+.row{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
+@media (max-width:480px){.row{grid-template-columns:repeat(2,1fr)}}
+.slot{min-height:62px;border-radius:10px;border:1px solid var(--free-line);background:var(--free);color:var(--text);padding:8px 9px;text-align:left;font:inherit;cursor:pointer;display:flex;flex-direction:column;justify-content:center;gap:2px;overflow:hidden}
+.slot .t{font-weight:700;font-size:16px;font-variant-numeric:tabular-nums}
+.slot .n{font-size:13px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.slot.taken{background:var(--taken);border-color:var(--line);cursor:default}
+.slot.taken .n{color:var(--text)}
+.slot.mine{background:var(--mine);border-color:var(--mine-line)}
+.slot.mine .n{color:var(--text);font-weight:600}
+.slot.past{opacity:.45;cursor:default}
+.slot.now{box-shadow:0 0 0 2px var(--now)}
+.slot:disabled{cursor:default}
+.slot:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(18px + env(safe-area-inset-bottom,0px));background:var(--text);color:var(--bg);padding:10px 16px;border-radius:999px;font-size:14px;opacity:0;pointer-events:none;transition:opacity .2s;max-width:90vw;text-align:center}
+.toast.show{opacity:1}
+.notice{background:var(--taken);border:1px solid var(--line);border-radius:10px;padding:10px 12px;font-size:14px;margin-bottom:14px;display:none}
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <p class="small">Dzisiaj jest</p>
+    <h1 id="date">…</h1>
+    <p class="sub">Przerwy po 15 min · 10:00–20:00 · grafik resetuje się każdego dnia</p>
+  </header>
+
+  <div class="notice" id="notice"></div>
+
+  <section class="card">
+    <label for="name">Twoje imię</label>
+    <input id="name" type="text" maxlength="24" autocomplete="nickname" placeholder="np. Jan">
+    <div class="stats">
+      <span><span id="count">Zajęte: 0 / 40</span> · <strong id="mine">Twoje przerwy: 0 / 2</strong></span>
+      <span class="legend">
+        <span><i class="dot" style="background:var(--free);border-color:var(--free-line)"></i>wolne</span>
+        <span><i class="dot" style="background:var(--mine);border-color:var(--mine-line)"></i>Twoje</span>
+        <span><i class="dot" style="background:var(--taken);border-color:var(--line)"></i>zajęte</span>
+      </span>
+    </div>
+  </section>
+
+  <div id="grid"></div>
+</main>
+<div class="toast" id="toast"></div>
+
+<script src="config.js"></script>
+<script>
+(function(){
+  var START=600, END=1200, STEP=15, POLL_MS=5000, MAX=2;
+  var CFG=window.BREAK_CONFIG||{};
+  var configured=CFG.SUPABASE_URL&&CFG.SUPABASE_KEY&&CFG.SUPABASE_URL.indexOf('TWOJ-')<0&&CFG.SUPABASE_KEY.indexOf('TWOJ-')<0;
+  var slots={}, date=null, minsAtFetch=0, fetchedAt=Date.now(), busy=false;
+  var nameEl=document.getElementById('name');
+  var gridEl=document.getElementById('grid');
+
+  function store(k,v){try{if(v===undefined)return localStorage.getItem(k);localStorage.setItem(k,v)}catch(e){return null}}
+  function pad(n){return (n<10?'0':'')+n}
+  function label(m){return pad(Math.floor(m/60))+':'+pad(m%60)}
+  function nowMin(){return minsAtFetch+Math.floor((Date.now()-fetchedAt)/60000)}
+
+  var uid=store('breakUid');
+  if(!uid){
+    uid=(window.crypto&&crypto.randomUUID)?crypto.randomUUID():('u'+Math.random().toString(36).slice(2)+Date.now().toString(36));
+    store('breakUid',uid);
+  }
+  nameEl.value=store('breakName')||'';
+
+  function toast(msg){
+    var t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');
+    clearTimeout(toast._t);toast._t=setTimeout(function(){t.classList.remove('show')},2400);
+  }
+  function notice(msg){var n=document.getElementById('notice');n.textContent=msg;n.style.display=msg?'block':'none'}
+
+  function rpc(fn,args){
+    return fetch(CFG.SUPABASE_URL.replace(/\/+$/,'')+'/rest/v1/rpc/'+fn,{
+      method:'POST',cache:'no-store',
+      headers:{'apikey':CFG.SUPABASE_KEY,'Content-Type':'application/json'},
+      body:JSON.stringify(args)
+    }).then(function(r){if(!r.ok)throw new Error('http '+r.status);return r.json()});
+  }
+
+  function renderDate(){
+    if(!date)return;
+    var p=date.split('-').map(Number);
+    var d=new Date(Date.UTC(p[0],p[1]-1,p[2]));
+    document.getElementById('date').textContent=
+      d.toLocaleDateString('pl-PL',{timeZone:'UTC',weekday:'long',day:'numeric',month:'long',year:'numeric'});
+  }
+
+  function render(){
+    var nm=nowMin(), taken=0, mineN=0;
+    gridEl.textContent='';
+    for(var h=START;h<END;h+=60){
+      var wrap=document.createElement('div');wrap.className='hour';
+      var h2=document.createElement('h2');h2.textContent=pad(h/60)+':00 – '+pad(h/60+1)+':00';
+      var row=document.createElement('div');row.className='row';
+      for(var m=h;m<h+60;m+=STEP){
+        (function(m){
+          var data=slots[m], b=document.createElement('button');
+          b.type='button';b.className='slot';
+          var t=document.createElement('span');t.className='t';t.textContent=label(m);
+          var n=document.createElement('span');n.className='n';
+          var past=date&&(m+STEP<=nm), isNow=date&&(nm>=m&&nm<m+STEP);
+          if(past)b.classList.add('past');
+          if(isNow)b.classList.add('now');
+          if(data){
+            taken++;
+            if(data.mine)mineN++;
+            b.classList.add(data.mine?'mine':'taken');
+            n.textContent=data.name+(data.mine?' (Ty)':'');
+            b.setAttribute('aria-label',label(m)+', '+n.textContent);
+            if(data.mine)b.onclick=function(){release(m)};else b.disabled=true;
+          }else{
+            n.textContent=past?'minęło':'wolne';
+            b.setAttribute('aria-label',label(m)+', wolne');
+            if(past||!date)b.disabled=true;else b.onclick=function(){claim(m)};
+          }
+          b.appendChild(t);b.appendChild(n);row.appendChild(b);
+        })(m);
+      }
+      wrap.appendChild(h2);wrap.appendChild(row);gridEl.appendChild(wrap);
+    }
+    document.getElementById('count').textContent='Zajęte: '+taken+' / '+((END-START)/STEP);
+    document.getElementById('mine').textContent='Twoje przerwy: '+mineN+' / '+MAX;
+  }
+
+  async function refresh(){
+    if(busy||!configured)return;
+    try{
+      var j=await rpc('get_state',{p_uid:uid});
+      date=j.date;minsAtFetch=j.minutes;fetchedAt=Date.now();
+      slots={};(j.slots||[]).forEach(function(s){slots[s.slot]=s});
+      notice('');
+    }catch(e){notice('Brak połączenia z serwerem — próbuję ponownie…')}
+    renderDate();render();
+  }
+
+  function mineCount(){var c=0;for(var k in slots)if(slots[k].mine)c++;return c}
+
+  async function claim(m){
+    var name=nameEl.value.trim();
+    if(!name){toast('Najpierw wpisz swoje imię');nameEl.focus();return}
+    if(mineCount()>=MAX){toast('Możesz wybrać maksymalnie '+MAX+' przerwy — zwolnij jedną');return}
+    if(busy)return;busy=true;store('breakName',name);
+    try{
+      var j=await rpc('claim_slot',{p_slot:m,p_name:name,p_uid:uid});
+      if(j.ok)toast('Przerwa o '+label(m)+' zapisana');
+      else if(j.error==='taken')toast('Ten termin jest już zajęty');
+      else if(j.error==='limit')toast('Możesz wybrać maksymalnie '+MAX+' przerwy');
+      else if(j.error==='past')toast('Ten termin już minął');
+      else toast('Nie udało się zapisać');
+    }catch(e){toast('Brak połączenia')}
+    busy=false;refresh();
+  }
+
+  async function release(m){
+    if(busy)return;busy=true;
+    try{await rpc('release_slot',{p_slot:m,p_uid:uid});toast('Zwolniono termin '+label(m))}
+    catch(e){toast('Brak połączenia')}
+    busy=false;refresh();
+  }
+
+  if(!configured){
+    notice('Strona nie jest jeszcze skonfigurowana: uzupełnij plik config.js (patrz README).');
+  }
+  setInterval(refresh,POLL_MS);
+  setInterval(render,30000);
+  document.addEventListener('visibilitychange',function(){if(!document.hidden)refresh()});
+  render();refresh();
+})();
+</script>
+</body>
+</html>
